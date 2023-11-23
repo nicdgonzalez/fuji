@@ -20,8 +20,8 @@ from typing import Annotated, Any
 
 import clap
 import requests
+from clap.metadata import Conflicts, Short
 from overrides import override
-from clap.metadata import Short
 
 from .server import Server
 from .tmux import TmuxSession
@@ -149,12 +149,12 @@ class FujiCommands(clap.Parser):
         self.root = path.resolve()
         _log.info(f"Successfully initialized Fuji in '{path}'.")
 
-    @clap.group()
-    def server(self) -> None:
-        """A collection of server-related commands."""
-        pass
+    # @clap.group()
+    # def server(self) -> None:
+    #     """A collection of server-related commands."""
+    #     pass
 
-    @server.command()
+    @clap.command()
     def list(self) -> None:
         """Display all available servers."""
         if not self.all_servers:
@@ -164,7 +164,7 @@ class FujiCommands(clap.Parser):
         for index, server in enumerate(self.all_servers, start=1):
             print(f"{index}. {server.name.upper()}")
 
-    @server.command()
+    @clap.command()
     def create(
         self,
         name: str,
@@ -265,7 +265,7 @@ class FujiCommands(clap.Parser):
             eula = server.path.joinpath("eula.txt")
             eula.write_text("eula=true")
 
-    @server.command()
+    @clap.command()
     def delete(
         self, name: str, /, *, assume_yes: Annotated[bool, Short("y")] = False
     ) -> None:
@@ -295,7 +295,7 @@ class FujiCommands(clap.Parser):
         subprocess.run(["rm", "-rf", server.path.as_posix()])
         _log.info(f"Successfully deleted server '{name}'.")
 
-    @server.command()
+    @clap.command()
     def edit(self, name: str, /) -> None:
         """Edit a server's server.properties file.
 
@@ -313,7 +313,7 @@ class FujiCommands(clap.Parser):
         _log.info(f"Opening '{server.server_properties}' in '{EDITOR}'.")
         subprocess.run([EDITOR, server.server_properties.as_posix()])
 
-    @server.command()
+    @clap.command()
     def start(
         self,
         name: str,
@@ -405,7 +405,7 @@ class FujiCommands(clap.Parser):
             os.remove(server.lock)
             _log.info(f"Removed lock file '{server.lock}'.")
 
-    @server.command()
+    @clap.command()
     def stop(self, name: str, /) -> None:
         """Stop a Minecraft server.
 
@@ -436,7 +436,7 @@ class FujiCommands(clap.Parser):
         tmux_session.kill()
         _log.info(f"Killed tmux session '{tmux_session.name}'.")
 
-    @server.command()
+    @clap.command()
     def status(self, name: str, /) -> None:
         """Display the status of a Minecraft server.
 
@@ -456,20 +456,80 @@ class FujiCommands(clap.Parser):
         else:
             print(f"Server '{name}' is offline.")
 
-    @server.command()
+    @clap.command()
     def migrate(self, name: str, directory: pathlib.Path, /) -> None:
         """Migrate a Minecraft server to a new directory.
 
         Parameters
         ----------
         name : str
-            The name of the server being migrated.
+            A name for the server being migrated.
         directory : pathlib.Path
             The directory to migrate the server from.
         """
+        # Move via copy. This is to ensure that the original server is not
+        # modified in any way.
+
+        # Validate the *from* directory and ensure that it is a valid server.
+
+        # Determine the server's name from the `server.properties` file.
+
+        # Ensures that a proper PaperMC server is runnable by Fuji.
+        # I think the only thing that needs to be done is to create a symlink
+        # to the server JAR file in the server's directory (at least for now).
         raise NotImplementedError
 
-    @server.command()
+    @clap.command()
+    def install_plugin(
+        self,
+        name: str,
+        filename: str,
+        /,
+        *,
+        local: Annotated[str | None, Conflicts("url")] = None,
+        url: Annotated[str | None, Conflicts("local")] = None,
+    ) -> None:
+        """Install a plugin to a Minecraft server.
+
+        Parameters
+        ----------
+        name : str
+            The name of the server to install the plugin to.
+        filename : str
+            The filename of the plugin to install.
+        local : str, optional
+            The path to the plugin to install on the local filesystem.
+        url : str, optional
+            The URL to download the plugin from.
+        """
+        name = self.validate_server_name(name)
+        server = self.get_server(name)
+
+        if not server.path.exists():
+            raise ValueError(f"Server '{name}' does not exist.")
+
+        plugin = server.path.joinpath("plugins", filename)
+
+        if local is not None:
+            local_plugin = pathlib.Path(local)
+            if not local_plugin.exists():
+                raise ValueError(f"Plugin '{plugin}' does not exist.")
+            plugin_data = local_plugin.read_bytes()
+        elif url is not None:
+            if (response := requests.get(url)).status_code != 200:
+                raise RuntimeError(
+                    f"Failed to download plugin: {response.text}"
+                )
+            plugin = server.path.joinpath("plugins", filename)
+            plugin_data = response.content
+        else:
+            raise ValueError("Either 'local' or 'url' must be specified.")
+
+        _log.info(f"Writing bytes to '{plugin}'.")
+        plugin.write_bytes(plugin_data)
+        _log.info(f"Successfully installed plugin '{filename}'.")
+
+    @clap.command()
     def upgrade(
         self,
         name: str,
