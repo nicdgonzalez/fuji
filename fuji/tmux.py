@@ -66,16 +66,22 @@ class TmuxSession:
         )
         self._log.info(f"Killed session: '{self.name}'")
 
-    def send_keys(self, command: str) -> None:
+    def send_keys(
+        self, command: str, enter: bool = True, **params: Any
+    ) -> None:
         """Send a command to the tmux session."""
         if not self.exists():
             self._log.warning(f"Session '{self.name}' does not exist.")
             return
 
-        _ = subprocess.run(
-            ["tmux", "send-keys", "-t", self.name, command, "Enter"],
-            shell=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        params.setdefault("shell", False)
+        cmd = [
+            "tmux",
+            "send-keys",
+            "-t",
+            self.name,
+            command,
+            "Enter" if enter else "",
+        ]
+        _ = subprocess.run(cmd, **params)
         self._log.info(f"Sent command to session '{self.name}': '{command}'")
