@@ -32,7 +32,7 @@ def setup_logging() -> None:
         handler.setFormatter(formatter)
         logging.root.addHandler(handler)
 
-    logging.root.setLevel(logging.DEBUG)
+    logging.root.setLevel(logging.INFO)
 
 
 def main() -> int:
