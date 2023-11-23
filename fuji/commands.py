@@ -11,213 +11,84 @@ import json
 import logging
 import os
 import pathlib
-import socket
+import random
 import subprocess
 import sys
-from typing import Annotated, Any, cast
+import threading
+import time
+from typing import Annotated, Any
 
 import clap
 import requests
 from clap.metadata import Short
-from overrides import override
 
+from .server import Server
 from .tmux import TmuxSession
 
-PAPERMC_API_VERSION = "v2"
+__all__ = ("FujiCommands",)
+
 EDITOR = os.environ.get("EDITOR", "vim")
+PAPERMC_API_VERSION = "v2"
+DEFAULT_ROOT = pathlib.Path.home().joinpath(".fuji")
 
 _log = logging.getLogger(__name__)
-
-
-def get_paper_jar(
-    server_jar: pathlib.Path,
-    *,
-    version: str | None = None,
-    build: int | None = None,
-) -> tuple[str, bytes]:
-    """Get the Paper JAR file for the specified version and build.
-
-    Parameters
-    ----------
-    server_jar : pathlib.Path
-        The path to the server JAR file. This is used to compare the latest
-        version of PaperMC to the currently installed version.
-    version : str, optional
-        The version of Minecraft to use.
-    build : int, optional
-        The build of Paper to use.
-
-    Returns
-    -------
-    tuple[str, bytes]
-        The name of the Paper JAR file and its contents.
-    """
-    _log.info(f"Getting JAR for PaperMC: {version}#{build}")
-    url = f"https://papermc.io/api/{PAPERMC_API_VERSION}/projects/paper"
-    data: dict[str, Any]
-
-    # We are essentially web scraping to determine the missing information
-    # (version and/or build) which means we are at the mercy of PaperMC's API.
-    # If the API changes, this will need to be updated accordingly. This is
-    # why we occasionally assert that certain keys are in the data.
-
-    if version is None:
-        if (response := requests.get(url)).status_code != 200:
-            raise RuntimeError(
-                f"Failed to get latest version of PaperMC: {response.text}"
-            )
-
-        data = response.json()
-        assert "versions" in data, "Data does not contain 'versions'."
-        version = data["versions"][-1]
-        _log.info(f"Using version '{version}' of PaperMC.")
-
-    url += f"/versions/{version}/builds"
-    if (response := requests.get(url)).status_code != 200:
-        raise RuntimeError(
-            f"Failed to get latest build of PaperMC: {response.text}"
-        )
-
-    if build is None:
-        data = response.json()["builds"][-1]
-    else:
-        tmp = response.json()
-        assert "builds" in tmp, "Response does not contain 'builds'."
-        builds = tmp["builds"]
-
-        valid_build = False
-        for b in builds:
-            if b["build"] == build:
-                valid_build = True
-                data = b
-                break
-
-        if not valid_build:
-            raise RuntimeError(
-                f"Build '{build}' is not valid for version '{version}'."
-            )
-
-    build = build or data["build"]
-    _log.info(f"Using build '{build}' of PaperMC.")
-
-    assert (
-        "downloads" in data
-        and "application" in data["downloads"]
-        and "name" in data["downloads"]["application"]
-    ), "Data does not contain 'downloads.application.name'."
-    filename: str = data["downloads"]["application"]["name"]
-
-    if server_jar.resolve().name == filename:
-        _log.info("PaperMC is already up to date.")
-        return filename, server_jar.read_bytes()
-
-    url += f"/{build}/downloads/{filename}"
-
-    _log.info(f"PaperMC is not up to date. Downloading from '{url}'...")
-    if (response := requests.get(url)).status_code != 200:
-        raise RuntimeError(f"Failed to download PaperMC: {response.text}")
-
-    _log.info("Download complete.")
-    return filename, response.content
+config_file = pathlib.Path(__file__).parents[1].joinpath("config.json")
 
 
 class FujiCommands(clap.Parser):
-    """Represents the commands that are available to the user."""
-
-    DEFAULT_SETUP_PATH = pathlib.Path.home().joinpath(".fuji")
+    """Represents the Fuji command-line interface."""
 
     def __init__(self) -> None:
         super().__init__(
             help="A command-line tool for managing Minecraft servers.",
             epilog="Thank you for using Fuji!",
         )
-        self._log = logging.getLogger(__name__)
-        self._tmux = TmuxSession("fuji")
-        self._fuji_path = pathlib.Path.home().joinpath(".fuji")
+        self.config = self._load_config()
+        self._root = self.config.get("root", DEFAULT_ROOT)
 
-        project_root = pathlib.Path(__file__).parents[1]
-        self._config_file = project_root.joinpath("config.json")
-
-        self.config: dict[str, Any] = self.load_config()
-
-    @property
-    def fuji_path(self) -> pathlib.Path:
-        """The path to the Fuji-related files."""
-        return self._fuji_path
-
-    @fuji_path.setter
-    def fuji_path(self, path: pathlib.Path, /) -> None:
-        self._fuji_path = path
-        self.config["fuji_path"] = str(path)
-
-    @property
-    def config_file(self) -> pathlib.Path:
-        """The path to the Fuji configuration file."""
-        return self._config_file
-
-    def save_config(self, config: dict[str, Any]) -> None:
-        """Save the Fuji configuration."""
-        with open(self.config_file, "w") as f:
-            json.dump(config, f, indent=4)
-
-    def load_config(self) -> dict[str, Any]:
-        """Load the Fuji configuration."""
-        try:
-            with open(self.config_file, "r") as f:
-                return cast(dict[str, Any], json.load(f))
-        except FileNotFoundError:
-            default_config: dict[str, Any] = {
-                "fuji_path": str(self.fuji_path),
-            }
-            self.save_config(default_config)
-            return default_config
-
-    @override
     def parse(
         self,
         argv: list[str] = sys.argv,
         /,
-        *,
         help_fmt: clap.HelpFormatter = clap.HelpFormatter(),
     ) -> None:
-        """Parse the command-line arguments."""
-        super().parse(argv, help_fmt=help_fmt)
-        self.save_config(self.config)
-
-    @clap.command()
-    def setup(self, directory: str = str(DEFAULT_SETUP_PATH), /) -> None:
-        """Setup the main Fuji directory.
+        """Parse command-line arguments.
 
         Parameters
         ----------
-        directory : str
-            The path to the directory to store all of the Fuji-related files.
+        argv : list[str], optional
+            The command-line arguments to parse.
+        help_fmt : clap.HelpFormatter, optional
+            The help formatter to use.
+        """
+        super().parse(argv, help_fmt=help_fmt)
+        self._save_config(self.config)
+
+    # COMMANDS #
+
+    @clap.command()
+    def setup(self, directory: pathlib.Path = str(DEFAULT_ROOT), /) -> None:
+        """Initialize Fuji for the first time.
+
+        Parameters
+        ----------
+        directory : pathlib.Path, optional
+            The directory to use as the root directory for Fuji.
         """
         path = pathlib.Path(directory)
-        if path != self.fuji_path:
-            self.fuji_path = path
-
-        self._log.info(f"Setting up Fuji at '{path}'.")
 
         if path.exists():
-            self._log.warning(f"Path '{path}' already exists.")
+            _log.warning(f"Directory '{path}' already exists.")
             return
 
-        directories = [
-            # For routine backups of each world.
-            "backups",
-            # For the Fuji log files.
-            "logs",
-            # For Server JAR files.
-            "jars",
-            # For the playable Minecraft server worlds.
-            "servers",
-        ]
+        _log.info(f"Initializing Fuji in '{path}'...")
 
+        directories = ("backups", "logs", "jars", "servers")
         for directory in directories:
             path.joinpath(directory).mkdir(parents=True, exist_ok=True)
 
-        self._log.info("Setup complete.")
+        self.root = path.resolve()
+        _log.info(f"Successfully initialized Fuji in '{path}'.")
 
     @clap.group()
     def server(self) -> None:
@@ -226,21 +97,20 @@ class FujiCommands(clap.Parser):
 
     @server.command()
     def list(self) -> None:
-        """List all of the Minecraft servers."""
-        servers = list(self.fuji_path.joinpath("servers").iterdir())
-
-        if not servers:
+        """Display all available servers."""
+        if not self.all_servers:
             print("No servers found.")
             return
 
-        for index, server in enumerate(servers, start=1):
-            print(f"{index}. {server.name}")
+        for index, server in enumerate(self.all_servers, start=1):
+            print(f"{index}. {server.name.upper()}")
 
     @server.command()
-    def new(
+    def create(
         self,
-        server: str,
+        name: str,
         /,
+        *,
         accept_eula: Annotated[bool, Short("y")] = False,
         edit: Annotated[bool, Short("e")] = False,
         version: str | None = None,
@@ -250,164 +120,464 @@ class FujiCommands(clap.Parser):
 
         Parameters
         ----------
-        server : str
-            The name of the server to create.
+        name : str
+            The name of the server.
+        accept_eula : bool, optional
+            Whether to accept the EULA without prompting the user.
+        edit : bool, optional
+            Open an editor to edit the server.properties file after it is
+            generated.
         version : str, optional
             The version of Minecraft to use.
         build : int, optional
             The build number of PaperMC to use.
-        accept_eula : bool, optional
-            Whether or not to accept the EULA without prompting the user.
-        edit : bool, optional
-            Whether or not to open the server.properties file for editing.
         """
-        self._log.info(f"Creating server '{server}'.")
-        server_path = self.fuji_path.joinpath("servers", server)
+        name = self.validate_server_name(name)
+        server = self.get_server(name)
 
-        if server_path.exists():
-            self._log.warning(f"Server '{server}' already exists.")
-            return
+        if server.path.exists():
+            raise ValueError(f"Server '{name}' already exists.")
 
-        server_path.mkdir(parents=True)
-        server_jar = self.fuji_path.joinpath("server.jar")
-        name, data = get_paper_jar(server_jar, version=version, build=build)
+        server.path.mkdir(parents=True)
+        _log.info(f"Created directory '{server.path}'.")
 
-        if server_jar.resolve().name != name:
-            paper_jar = self.fuji_path.joinpath("jars", name)
-            _ = paper_jar.write_bytes(data)
+        # TODO: Create a way to manually invoke a command. This is a hack.
+        self.upgrade.parent = self
+        self.upgrade(name, version=version, build=build)
 
-            self._log.info(f"Updating server.jar symlink to '{name}'.")
+        self.generate_eula(server, accept_eula=accept_eula)
 
-            if server_jar.exists():
-                server_jar.unlink()
+        if edit:
+            _log.info(f"Opening '{server.server_properties}' in '{EDITOR}'.")
+            subprocess.run([EDITOR, server.server_properties.as_posix()])
 
-            server_jar.symlink_to(paper_jar)
+        _log.info(f"Successfully created server '{name}'.")
 
-        cmd = ["java", "-jar", server_jar.as_posix(), "nogui"]
-        self._log.info(f"Running command: {' '.join(cmd)}")
-        _ = subprocess.run(
+    @server.command()
+    def delete(
+        self, name: str, /, *, assume_yes: Annotated[bool, Short("y")] = False
+    ) -> None:
+        """Delete a Minecraft server.
+
+        Parameters
+        ----------
+        name : str
+            The name of the server to delete.
+        assume_yes : bool, optional
+            Whether to skip the confirmation prompt.
+        """
+        name = self.validate_server_name(name)
+        server = self.get_server(name)
+        _log.info(f"Deleting server '{name}' at '{server.path}'...")
+
+        if not server.path.exists():
+            raise ValueError(f"Server '{name}' does not exist.")
+
+        if not assume_yes:
+            response = input(
+                f"Are you sure you want to delete '{name}'? [y/N] "
+            )
+            if response.lower() not in ("y", "yes"):
+                return
+
+        subprocess.run(["rm", "-rf", server.path.as_posix()])
+        _log.info(f"Successfully deleted server '{name}'.")
+
+    @server.command()
+    def edit(self, name: str, /) -> None:
+        """Edit a server's server.properties file.
+
+        Parameters
+        ----------
+        name : str
+            The name of the server to edit.
+        """
+        name = self.validate_server_name(name)
+        server = self.get_server(name)
+
+        if not server.path.exists():
+            raise ValueError(f"Server '{name}' does not exist.")
+
+        _log.info(f"Opening '{server.server_properties}' in '{EDITOR}'.")
+        subprocess.run([EDITOR, server.server_properties.as_posix()])
+
+    @server.command()
+    def start(
+        self,
+        name: str,
+        /,
+        *,
+        auto_reconnect: Annotated[bool, Short("r")] = False,
+    ) -> None:
+        """Start a Minecraft server.
+
+        Parameters
+        ----------
+        name : str
+            The name of the server to start.
+        auto_reconnect : bool, optional
+            Whether to automatically reconnect to the server if it crashes.
+        """
+        name = self.validate_server_name(name)
+        server = self.get_server(name)
+
+        if not server.path.exists():
+            raise ValueError(f"Server '{name}' does not exist.")
+
+        tmux_session = TmuxSession(f"fuji-{name}")
+        if not tmux_session.exists():
+            tmux_session.new()
+
+        # Aikar's flags for optimizing the JVM: https://mcflags.emc.gs
+        cmd = [
+            "cd",
+            server.path.resolve().as_posix(),
+            "&&",
+            "java",
+            "-Xms5G",
+            "-Xmx5G",
+            "-XX:+UseG1GC",
+            "-XX:+ParallelRefProcEnabled",
+            "-XX:MaxGCPauseMillis=200",
+            "-XX:+UnlockExperimentalVMOptions",
+            "-XX:+DisableExplicitGC",
+            "-XX:+AlwaysPreTouch",
+            "-XX:G1NewSizePercent=30",
+            "-XX:G1MaxNewSizePercent=40",
+            "-XX:G1HeapRegionSize=8M",
+            "-XX:G1ReservePercent=20",
+            "-XX:G1HeapWastePercent=5",
+            "-XX:G1MixedGCCountTarget=4",
+            "-XX:InitiatingHeapOccupancyPercent=15",
+            "-XX:G1MixedGCLiveThresholdPercent=90",
+            "-XX:G1RSetUpdatingPauseTimePercent=5",
+            "-XX:SurvivorRatio=32",
+            "-XX:+PerfDisableSharedMem",
+            "-XX:MaxTenuringThreshold=1",
+            "-Dusing.aikars.flags=https://mcflags.emc.gs",
+            "-Daikars.new.flags=true",
+            "-jar",
+            server.server_jar.resolve().as_posix(),
+            "--nogui",
+        ]
+
+        def watch_server() -> None:
+            while 1:
+                retries = 20
+                if not server.is_online() and not server.is_locked():
+                    _log.info(
+                        f"Server '{name}' is offline. Sending command "
+                        "to start server..."
+                    )
+                    tmux_session.send_keys(" ".join(cmd))
+                    server.lock.touch()
+                    _log.info(f"Created lock file '{server.lock}'.")
+
+                while not server.is_online() and retries > 0:
+                    retries -= 1
+                    seconds = 1.0 + (random.randint(10, 100) / 100)
+                    time.sleep(seconds)
+
+                _log.info(f"Server '{name}' is online.")
+                os.remove(server.lock)
+                _log.info(f"Removed lock file '{server.lock}'.")
+
+                if not auto_reconnect:
+                    break
+
+        try:
+            # TODO: Does this leave a zombie process if auto_reconnect is true?
+            thread = threading.Thread(target=watch_server, daemon=False)
+            thread.start()
+        except KeyboardInterrupt:
+            os.remove(server.lock)
+            _log.info(f"Removed lock file '{server.lock}'.")
+
+    @server.command()
+    def stop(self, name: str, /) -> None:
+        """Stop a Minecraft server.
+
+        Parameters
+        ----------
+        name : str
+            The name of the server to stop.
+        """
+        name = self.validate_server_name(name)
+        server = self.get_server(name)
+        tmux_session = TmuxSession(f"fuji-{name}")
+
+        if not server.path.exists():
+            raise ValueError(f"Server '{name}' does not exist.")
+
+        if not tmux_session.exists():
+            raise RuntimeError(f"Server '{name}' is not running.")
+
+        tmux_session.send_keys("stop")
+        _log.info(f"Sent command to stop server '{name}'.")
+
+        retries = 10
+        while server.is_online() and retries > 0:
+            retries -= 1
+            time.sleep(1)
+
+        _log.info(f"Server '{name}' is offline.")
+        tmux_session.kill()
+        _log.info(f"Killed tmux session '{tmux_session.name}'.")
+
+    @server.command()
+    def status(self, name: str, /) -> None:
+        """Display the status of a Minecraft server.
+
+        Parameters
+        ----------
+        name : str
+            The name of the server to check.
+        """
+        name = self.validate_server_name(name)
+        server = self.get_server(name)
+
+        if not server.path.exists():
+            raise ValueError(f"Server '{name}' does not exist.")
+
+        if server.is_online():
+            print(f"Server '{name}' is online.")
+        else:
+            print(f"Server '{name}' is offline.")
+
+    @server.command()
+    def migrate(self, name: str, directory: pathlib.Path, /) -> None:
+        """Migrate a Minecraft server to a new directory.
+
+        Parameters
+        ----------
+        name : str
+            The name of the server being migrated.
+        directory : pathlib.Path
+            The directory to migrate the server from.
+        """
+        raise NotImplementedError
+
+    @server.command()
+    def upgrade(
+        self,
+        name: str,
+        /,
+        version: str | None = None,
+        build: int | None = None,
+    ) -> None:
+        """Update a Minecraft server to a newer version of PaperMC.
+
+        Parameters
+        ----------
+        name : str
+            The name of the server to update.
+        version : str, optional
+            The version of PaperMC to update to.
+        build : int, optional
+            The build number of PaperMC to update to.
+        """
+        name = self.validate_server_name(name)
+        server = self.get_server(name)
+
+        if not server.path.exists():
+            raise ValueError(f"Server '{name}' does not exist.")
+
+        filename, data = self.get_paper_jar(version=version, build=build)
+        if server.server_jar.resolve().name != filename:
+            paper_jar = self.root.joinpath("jars", filename)
+            _log.info(f"Writing bytes to '{paper_jar}'.")
+            paper_jar.write_bytes(data)
+
+            _log.info(f"Symlink '{server.server_jar}' -> '{paper_jar}'.")
+            if server.server_jar.exists():
+                server.server_jar.unlink()
+            server.server_jar.symlink_to(paper_jar)
+
+        _log.info(f"Successfully upgraded server '{name}'.")
+
+    # PROPERTIES / HELPER METHODS #
+
+    @property
+    def root(self) -> pathlib.Path:
+        """The base directory of all Fuji-related files."""
+        return pathlib.Path(self._root)
+
+    @root.setter
+    def root(self, value: pathlib.Path) -> None:
+        self.config["root"] = str(value)
+
+    @property
+    def all_servers(self) -> tuple[pathlib.Path, ...]:
+        """Get all of the servers that Fuji is managing."""
+        return tuple(self.root.joinpath("servers").iterdir())
+
+    def get_server(self, name: str, /) -> Server:
+        """Convert a server name to a server object.
+
+        Parameters
+        ----------
+        name : str
+            The name of the server.
+
+        Returns
+        -------
+        Server
+            The server object.
+        """
+        return Server(ctx=self, name=name)
+
+    def validate_server_name(self, name: str, /) -> str:
+        """Validate a server name.
+
+        Parameters
+        ----------
+        name : str
+            The name of the server.
+
+        Returns
+        -------
+        str
+            The validated server name.
+        """
+        if not name[0].isalpha():
+            raise ValueError(f"'{name}' is not a valid server name.")
+
+        return name.lower()
+
+    def get_paper_jar(
+        self, version: str | None = None, build: int | None = None
+    ) -> tuple[str, bytes]:
+        """Get the PaperMC server JAR file for the specified version and build.
+
+        Parameters
+        ----------
+        version : str, optional
+            The version of PaperMC to download. If not specified, the latest
+            version will be downloaded.
+        build : int, optional
+            The build number of PaperMC to download. If not specified, the
+            latest build will be downloaded.
+
+        Returns
+        -------
+        tuple[str, bytes]
+            A tuple containing the filename of the downloaded JAR file and the
+            contents of the JAR file.
+
+        Raises
+        ------
+        RuntimeError
+            If the server JAR file could not be downloaded.
+        """
+        url = f"https://papermc.io/api/{PAPERMC_API_VERSION}/projects/paper"
+
+        if version is None:
+            if (response := requests.get(url)).status_code != 200:
+                raise RuntimeError(
+                    f"Failed to get latest version of PaperMC: {response.text}"
+                )
+            version = response.json()["versions"][-1]
+
+        url += f"/versions/{version}/builds"
+
+        if (response := requests.get(url)).status_code != 200:
+            raise RuntimeError(
+                f"Failed to get latest build of PaperMC: {response.text}"
+            )
+
+        if build is None:
+            data = response.json()["builds"][-1]
+        else:
+            temp = response.json()
+            builds = temp["builds"]
+
+            valid_build = False
+            for b in builds:
+                if b["build"] == build:
+                    valid_build = True
+                    data = b
+                    break
+
+            if not valid_build:
+                raise RuntimeError(
+                    f"Invalid build number '{build}' for version '{version}'."
+                )
+
+        build = build or data["build"]
+        filename: str = data["downloads"]["application"]["name"]
+
+        for f in self.root.joinpath("jars").iterdir():
+            if f.name == filename:
+                _log.info("PaperMC is already up-to-date.")
+                return filename, f.read_bytes()
+
+        url += f"/{build}/downloads/{filename}"
+
+        _log.info(f"Downloading PaperMC {version} build {build}...")
+        if (response := requests.get(url)).status_code != 200:
+            raise RuntimeError(f"Failed to download PaperMC: {response.text}")
+
+        _log.info("Download complete.")
+        return filename, response.content
+
+    def generate_eula(
+        self, /, server: Server, accept_eula: bool = False
+    ) -> None:
+        """Generate the EULA for a server.
+
+        Parameters
+        ----------
+        server : Server
+            The server to generate the EULA for.
+        accept_eula : bool, optional
+            Whether to accept the EULA without prompting the user.
+        """
+        cmd = ["java", "-jar", server.server_jar.as_posix(), "--nogui"]
+        subprocess.run(
             cmd,
             shell=False,
-            cwd=server_path,
+            cwd=server.path,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
 
         if not accept_eula:
             response = input(
-                "By continuing, you accept the Minecraft EULA:\n"
+                "Please read the Minecraft EULA before continuing:\n"
                 "https://aka.ms/MinecraftEULA\n"
-                "Do you accept? [y/N] "
+                "Do you accept the Minecraft EULA? [y/N] "
             )
 
             if response.lower() not in ("y", "yes"):
-                return
+                raise RuntimeError("You must accept the Minecraft EULA.")
 
-        eula = server_path.joinpath("eula.txt")
-        _ = eula.write_text("eula=true")
+            eula = server.path.joinpath("eula.txt")
+            eula.write_text("eula=true")
 
-        if edit:
-            self._log.info(
-                f"Opening server.properties for editing using {EDITOR}."
-            )
-            server_properties = server_path.joinpath("server.properties")
-            _ = subprocess.run([EDITOR, server_properties.as_posix()])
+    def _load_config(self) -> dict[str, Any]:
+        """Read from the configuration file.
 
-        self._log.info(f"Server '{server}' is ready.")
-
-    @server.command()
-    def remove(
-        self,
-        server: str,
-        /,
-        *,
-        assume_yes: Annotated[bool, Short("y")] = False,
-    ) -> None:
-        """Remove a Minecraft server.
-
-        Parameters
-        ----------
-        server : str
-            The name of the server to remove.
-        assume_yes : bool, optional
-            Whether or not to skip the confirmation prompt.
+        Returns
+        -------
+        dict[str, Any]
+            The contents of the configuration file.
         """
-        self._log.info(f"Removing server '{server}'.")
-        server_path = self.fuji_path.joinpath("servers", server)
+        default_data = {"root": str(DEFAULT_ROOT)}
 
-        if not server_path.exists():
-            self._log.warning(f"Server '{server}' does not exist.")
-            return
-
-        if not assume_yes:
-            response = input(
-                f"Are you sure you want to remove '{server}'? [y/N] "
-            )
-
-            if response.lower() not in ("y", "yes"):
-                return
-
-        _ = subprocess.run(["rm", "-rf", server_path.as_posix()])
-
-        self._log.info(f"Server '{server}' has been removed.")
-
-    @server.command()
-    def edit(self, server: str, /) -> None:
-        """Edit the server.properties file.
-
-        Parameters
-        ----------
-        server : str
-            The name of the server to edit.
-        """
-        server_properties = self.fuji_path.joinpath(
-            "servers", server, "server.properties"
-        )
-        _ = subprocess.run([EDITOR, server_properties.as_posix()])
-
-    @server.command()
-    def start(self, server: str, /) -> None:
-        """Start a Minecraft server.
-
-        Parameters
-        ----------
-        server : str
-            The name of the server to start.
-        """
-        raise NotImplementedError
-
-    @server.command()
-    def stop(self, server: str, /) -> None:
-        """Stop a Minecraft server.
-
-        Parameters
-        ----------
-        server : str
-            The name of the server to stop.
-        """
-        raise NotImplementedError
-
-    @server.command()
-    def status(self, server: str, /) -> None:
-        """Get the status of the server.
-
-        Parameters
-        ----------
-        server : str
-            The name of the server to get the status of.
-        """
-        # TODO: This is a temporary implementation. I probably need to read
-        # the server.properties to determine the address and port.
-        if self.server_online("127.0.0.1", 25565):
-            self._log.info("Server is online.")
-        else:
-            self._log.info("Server is offline.")
-
-    def server_online(self, host: str, port: int) -> bool:
-        """Check if the server is online."""
-        address = host, port
         try:
-            with socket.create_connection(address, timeout=1):
-                return True
-        except socket.error:
-            return False
+            return json.loads(config_file.read_text())
+        except (FileNotFoundError, json.JSONDecodeError):
+            _log.warning("Failed to read configuration file.")
+            self._save_config(default_data)
+            return default_data
+
+    def _save_config(self, data: dict[str, Any], /) -> None:
+        """Write to the configuration file.
+
+        Parameters
+        ----------
+        data : dict[str, Any]
+            The data to write to the configuration file.
+        """
+        with config_file.open("w") as f:
+            json.dump(data, f, indent=4)
