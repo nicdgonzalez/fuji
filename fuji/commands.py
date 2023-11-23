@@ -20,6 +20,7 @@ from typing import Annotated, Any
 
 import clap
 import requests
+from overrides import override
 from clap.metadata import Short
 
 from .server import Server
@@ -46,6 +47,49 @@ class FujiCommands(clap.Parser):
         self.config = self._load_config()
         self._root = self.config.get("root", DEFAULT_ROOT)
 
+    @property
+    def root(self) -> pathlib.Path:
+        """The base directory of all Fuji-related files."""
+        return pathlib.Path(self._root)
+
+    @root.setter
+    def root(self, value: pathlib.Path) -> None:
+        self.config["root"] = str(value)
+
+    @property
+    def all_servers(self) -> tuple[pathlib.Path, ...]:
+        """Get all of the servers that Fuji is managing."""
+        return tuple(self.root.joinpath("servers").iterdir())
+
+    def _load_config(self) -> dict[str, Any]:
+        """Read from the configuration file.
+
+        Returns
+        -------
+        dict[str, Any]
+            The contents of the configuration file.
+        """
+        default_data = {"root": str(DEFAULT_ROOT)}
+
+        try:
+            return json.loads(config_file.read_text())
+        except (FileNotFoundError, json.JSONDecodeError):
+            _log.warning("Failed to read configuration file.")
+            self._save_config(default_data)
+            return default_data
+
+    def _save_config(self, data: dict[str, Any], /) -> None:
+        """Write to the configuration file.
+
+        Parameters
+        ----------
+        data : dict[str, Any]
+            The data to write to the configuration file.
+        """
+        with config_file.open("w") as f:
+            json.dump(data, f, indent=4)
+
+    @override
     def parse(
         self,
         argv: list[str] = sys.argv,
@@ -63,6 +107,21 @@ class FujiCommands(clap.Parser):
         """
         super().parse(argv, help_fmt=help_fmt)
         self._save_config(self.config)
+
+    def get_server(self, name: str, /) -> Server:
+        """Convert a server name to a :class:`Server` object.
+
+        Parameters
+        ----------
+        name : str
+            The name of the server.
+
+        Returns
+        -------
+        Server
+            The server object.
+        """
+        return Server(ctx=self, name=name)
 
     # COMMANDS #
 
@@ -141,7 +200,8 @@ class FujiCommands(clap.Parser):
         server.path.mkdir(parents=True)
         _log.info(f"Created directory '{server.path}'.")
 
-        # TODO: Create a way to manually invoke a command. This is a hack.
+        # TODO: This is a workaround. Maybe define a `Command.invoke` method
+        # with a `parent` parameter for manually invoking commands?
         self.upgrade.parent = self
         self.upgrade(name, version=version, build=build)
 
@@ -152,6 +212,58 @@ class FujiCommands(clap.Parser):
             subprocess.run([EDITOR, server.server_properties.as_posix()])
 
         _log.info(f"Successfully created server '{name}'.")
+
+    def validate_server_name(self, name: str, /) -> str:
+        """Validate a server name.
+
+        Parameters
+        ----------
+        name : str
+            The name of the server.
+
+        Returns
+        -------
+        str
+            The validated server name.
+        """
+        if not name[0].isalpha():
+            raise ValueError(f"'{name}' is not a valid server name.")
+
+        return name.lower()
+
+    def generate_eula(
+        self, /, server: Server, accept_eula: bool = False
+    ) -> None:
+        """Generate the EULA for a server.
+
+        Parameters
+        ----------
+        server : Server
+            The server to generate the EULA for.
+        accept_eula : bool, optional
+            Whether to accept the EULA without prompting the user.
+        """
+        cmd = ["java", "-jar", server.server_jar.as_posix(), "--nogui"]
+        subprocess.run(
+            cmd,
+            shell=False,
+            cwd=server.path,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+        if not accept_eula:
+            response = input(
+                "Please read the Minecraft EULA before continuing:\n"
+                "https://aka.ms/MinecraftEULA\n"
+                "Do you accept the Minecraft EULA? [y/N] "
+            )
+
+            if response.lower() not in ("y", "yes"):
+                raise RuntimeError("You must accept the Minecraft EULA.")
+
+            eula = server.path.joinpath("eula.txt")
+            eula.write_text("eula=true")
 
     @server.command()
     def delete(
@@ -395,55 +507,6 @@ class FujiCommands(clap.Parser):
 
         _log.info(f"Successfully upgraded server '{name}'.")
 
-    # PROPERTIES / HELPER METHODS #
-
-    @property
-    def root(self) -> pathlib.Path:
-        """The base directory of all Fuji-related files."""
-        return pathlib.Path(self._root)
-
-    @root.setter
-    def root(self, value: pathlib.Path) -> None:
-        self.config["root"] = str(value)
-
-    @property
-    def all_servers(self) -> tuple[pathlib.Path, ...]:
-        """Get all of the servers that Fuji is managing."""
-        return tuple(self.root.joinpath("servers").iterdir())
-
-    def get_server(self, name: str, /) -> Server:
-        """Convert a server name to a server object.
-
-        Parameters
-        ----------
-        name : str
-            The name of the server.
-
-        Returns
-        -------
-        Server
-            The server object.
-        """
-        return Server(ctx=self, name=name)
-
-    def validate_server_name(self, name: str, /) -> str:
-        """Validate a server name.
-
-        Parameters
-        ----------
-        name : str
-            The name of the server.
-
-        Returns
-        -------
-        str
-            The validated server name.
-        """
-        if not name[0].isalpha():
-            raise ValueError(f"'{name}' is not a valid server name.")
-
-        return name.lower()
-
     def get_paper_jar(
         self, version: str | None = None, build: int | None = None
     ) -> tuple[str, bytes]:
@@ -519,65 +582,3 @@ class FujiCommands(clap.Parser):
 
         _log.info("Download complete.")
         return filename, response.content
-
-    def generate_eula(
-        self, /, server: Server, accept_eula: bool = False
-    ) -> None:
-        """Generate the EULA for a server.
-
-        Parameters
-        ----------
-        server : Server
-            The server to generate the EULA for.
-        accept_eula : bool, optional
-            Whether to accept the EULA without prompting the user.
-        """
-        cmd = ["java", "-jar", server.server_jar.as_posix(), "--nogui"]
-        subprocess.run(
-            cmd,
-            shell=False,
-            cwd=server.path,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-
-        if not accept_eula:
-            response = input(
-                "Please read the Minecraft EULA before continuing:\n"
-                "https://aka.ms/MinecraftEULA\n"
-                "Do you accept the Minecraft EULA? [y/N] "
-            )
-
-            if response.lower() not in ("y", "yes"):
-                raise RuntimeError("You must accept the Minecraft EULA.")
-
-            eula = server.path.joinpath("eula.txt")
-            eula.write_text("eula=true")
-
-    def _load_config(self) -> dict[str, Any]:
-        """Read from the configuration file.
-
-        Returns
-        -------
-        dict[str, Any]
-            The contents of the configuration file.
-        """
-        default_data = {"root": str(DEFAULT_ROOT)}
-
-        try:
-            return json.loads(config_file.read_text())
-        except (FileNotFoundError, json.JSONDecodeError):
-            _log.warning("Failed to read configuration file.")
-            self._save_config(default_data)
-            return default_data
-
-    def _save_config(self, data: dict[str, Any], /) -> None:
-        """Write to the configuration file.
-
-        Parameters
-        ----------
-        data : dict[str, Any]
-            The data to write to the configuration file.
-        """
-        with config_file.open("w") as f:
-            json.dump(data, f, indent=4)
