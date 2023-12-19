@@ -1,31 +1,39 @@
-"""
-Main
-====
-
-The main entry-point for the application. This is the file that is run when
-executing `python -m fuji` or `fuji` from the command-line.
-
-"""
 from __future__ import annotations
 
 import logging
 import sys
+from typing import TYPE_CHECKING
 
-from .commands import FujiCommands
+import clap
+
+if TYPE_CHECKING:
+    from builtins import list as List
+
+parser = clap.Parser(
+    "A command-line tool for managing Minecraft servers.",
+    epilog="Thank you for using Fuji!",
+)
+
+extensions = [
+    ".commands",
+]
+
+for extension in extensions:
+    parser.add_extension(extension, package="fuji")
 
 
-def setup_logging() -> None:
+def logging_setup() -> None:
     """Configure logging for the application."""
-    handlers: list[logging.Handler] = []
+    handlers: List[logging.Handler] = []
     formatter = logging.Formatter(
-        fmt="%(asctime)s %(levelname)s %(name)s]: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S %Z",
+        fmt="$(asctime)s %(levelname)s %(name)s]: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S%z",
     )
 
     stream_handler = logging.StreamHandler(sys.stdout)
     handlers.append(stream_handler)
 
-    # Add additional handlers (e.g. file handler) here.
+    # Add additional handlers here (e.g. file handler).
     ...
 
     for handler in handlers:
@@ -36,20 +44,7 @@ def setup_logging() -> None:
 
 
 def main() -> int:
-    """The main entry-point for the application.
-
-    Returns
-    -------
-    int
-        The exit code.
-    """
-    setup_logging()
-
-    parser = FujiCommands()
+    logging_setup()
     parser.parse()
 
     return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

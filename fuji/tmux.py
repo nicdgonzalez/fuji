@@ -1,32 +1,14 @@
-"""
-tmux
-====
-
-This module provides a simple wrapper around the `tmux` command-line utility.
-
-"""
-from __future__ import annotations
-
 import logging
 import subprocess
-from typing import Any
+
+_log = logging.getLogger(__name__)
 
 
 class TmuxSession:
-    """Represents a tmux session.
-
-    Parameters
-    ----------
-    name : str
-        The name of the tmux session.
-    """
-
-    def __init__(self, name: str, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, name: str) -> None:
         self.name = name
-        self._log = logging.getLogger(__name__)
 
-    def exists(self) -> bool:
-        """Check that the session is valid."""
+    def is_alive(self) -> bool:
         try:
             _ = subprocess.check_output(
                 ["tmux", "has-session", "-t", self.name],
@@ -35,13 +17,12 @@ class TmuxSession:
             )
         except subprocess.CalledProcessError:
             return False
-        else:
-            return True
 
-    def new(self) -> None:
-        """Create a new tmux session."""
-        if self.exists():
-            self._log.warning(f"Session '{self.name}' already exists.")
+        return True
+
+    def create(self) -> None:
+        if self.is_alive():
+            _log.warning(f"Session {self.name!r} already exists.")
             return
 
         _ = subprocess.run(
@@ -50,12 +31,11 @@ class TmuxSession:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        self._log.info(f"Created new session: '{self.name}'")
+        _log.info(f"Created session: {self.name!r}")
 
-    def kill(self) -> None:
-        """Kill the tmux session."""
-        if not self.exists():
-            self._log.warning(f"Session '{self.name}' does not exist.")
+    def destroy(self) -> None:
+        if not self.is_alive():
+            _log.warning(f"Session {self.name!r} does not exist.")
             return
 
         _ = subprocess.run(
@@ -64,24 +44,17 @@ class TmuxSession:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        self._log.info(f"Killed session: '{self.name}'")
+        _log.info(f"Killed session: {self.name!r}")
 
-    def send_keys(
-        self, command: str, enter: bool = True, **params: Any
-    ) -> None:
-        """Send a command to the tmux session."""
-        if not self.exists():
-            self._log.warning(f"Session '{self.name}' does not exist.")
+    def send_keys(self, command: str) -> None:
+        if not self.is_alive():
+            _log.warning(f"Session {self.name!r} does not exist.")
             return
 
-        params.setdefault("shell", False)
-        cmd = [
-            "tmux",
-            "send-keys",
-            "-t",
-            self.name,
-            command,
-            "Enter" if enter else "",
-        ]
-        _ = subprocess.run(cmd, **params)
-        self._log.info(f"Sent command to session '{self.name}': '{command}'")
+        _ = subprocess.run(
+            ["tmux", "send-keys", "-t", self.name, command],
+            shell=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        _log.info(f"Sent keys to session {self.name!r}: {command!r}")
