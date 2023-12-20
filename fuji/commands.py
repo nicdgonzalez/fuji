@@ -11,6 +11,9 @@ if TYPE_CHECKING:
 
 
 class FujiCommands(clap.Extension):
+    def __init__(self) -> None:
+        self._config = {}
+
     @clap.command()
     def init(self, directory: str, /) -> None:
         """Run once to initialize Fuji.
