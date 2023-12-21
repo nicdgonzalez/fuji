@@ -65,12 +65,6 @@ Fuji will **not** make any alterations to your network configuration.
 If you intend to allow players from outside your network to join,
 please follow these steps carefully:
 
-> [!IMPORTANT]
-> Always prioritize the security of your network. Failure to properly configure
-> these settings may expose your system to potential risks. If you are
-> uncertain about any aspect, seek guidance from reliable sources or consult
-> with a network security professional.
-
 1. **Research Port Forwarding:**
 Understand the concept of port forwarding. Log in to your router settings
 and create a port forwarding rule for the Minecraft server's port
@@ -91,3 +85,9 @@ Open the server.properties file in your Minecraft server directory and ensure
 that the server-ip property is either blank or set to your internal
 network IP. This ensures that the server listens for connections on all
 available network interfaces.
+
+> [!IMPORTANT]
+> Always prioritize the security of your network. Failure to properly configure
+> these settings may expose your system to potential risks. If you are
+> uncertain about any aspect, seek guidance from reliable sources or consult
+> with a network security professional.
