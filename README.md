@@ -7,7 +7,7 @@
 This project was built to demonstrate how [clap](../../../clap) works.
 
 > [!NOTE]
-> Fuji uses [PaperMC](https://papermc.io/) for the server backend.
+> Fuji uses [PaperMC](https://papermc.io/) for the backend server.
 
 ## Getting Started
 
@@ -19,14 +19,16 @@ This project was built to demonstrate how [clap](../../../clap) works.
 
 ### Installation
 
-This project is not available on PyPI, so you need to install it locally:
+This project is not available on PyPI, so you need to clone the
+repository and install it locally:
 
 ```bash
 git clone https://github.com/nicdgonzalez/fuji && cd ./fuji
 python -m pip install -U .
 ```
 
-The `fuji` command should now be available; verify by running:
+The `fuji` command should now be available.
+You can run the following command to verify:
 
 ```console
 $ fuji -V
@@ -82,14 +84,16 @@ available network interfaces.
 > uncertain about any aspect, seek guidance from reliable sources or consult
 > with a network security professional.
 
-#### Example Server
+#### Minimal Example
 
 Now, here is how to create a new Minecraft server and run it:
 
 ```bash
 git clone https://github.com/nicdgonzalez/fuji
 cd ./fuji
+# fuji --help
 fuji init
 fuji create "test" --accept-eula
+# fuji edit "test"
 fuji start "test" --auto-reconnect
 ```
