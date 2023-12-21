@@ -9,15 +9,13 @@ This project was built to demonstrate how [clap](../../../clap) works.
 > [!NOTE]
 > Fuji uses [PaperMC](https://papermc.io/) for the backend server.
 
-## Getting Started
-
-### Requirements
+## Requirements
 
 * Java 17.0+
 * tmux 3.2+
 * Python 3.8+
 
-### Installation
+## Installation
 
 This project is not available on PyPI, so you need to clone the
 repository and install it locally:
@@ -27,7 +25,7 @@ git clone https://github.com/nicdgonzalez/fuji && cd ./fuji
 python -m pip install -U .
 ```
 
-The `fuji` command should now be available.
+The `fuji` command should now be available (globally).
 You can run the following command to verify:
 
 ```console
@@ -44,18 +42,34 @@ fuji init
 fuji init ./target/path
 ```
 
-Now run `fuji --help` to view the full list of available commands.
+Finally, run `fuji --help` to view the full list of available commands.
 
-### Quickstart
+## Minimal Example
 
-#### Important Safety Information
+The following example demonstrates how to initiate a new Minecraft server.
+
+```bash
+git clone https://github.com/nicdgonzalez/fuji
+cd ./fuji
+# fuji --help
+fuji init
+fuji create "test" --accept-eula
+# fuji edit "test"
+fuji start "test" --auto-reconnect
+```
+
+## Enabling External Access to Your Minecraft Server
 
 Fuji will **not** make any alterations to your network configuration.
-The following example demonstrates the initiation of a new Minecraft server
-exclusively for LAN players.
 
 If you intend to allow players from outside your network to join,
 please follow these steps carefully:
+
+> [!IMPORTANT]
+> Always prioritize the security of your network. Failure to properly configure
+> these settings may expose your system to potential risks. If you are
+> uncertain about any aspect, seek guidance from reliable sources or consult
+> with a network security professional.
 
 1. **Research Port Forwarding:**
 Understand the concept of port forwarding. Log in to your router settings
@@ -77,23 +91,3 @@ Open the server.properties file in your Minecraft server directory and ensure
 that the server-ip property is either blank or set to your internal
 network IP. This ensures that the server listens for connections on all
 available network interfaces.
-
-> [!IMPORTANT]
-> Always prioritize the security of your network. Failure to properly configure
-> these settings may expose your system to potential risks. If you are
-> uncertain about any aspect, seek guidance from reliable sources or consult
-> with a network security professional.
-
-#### Minimal Example
-
-Now, here is how to create a new Minecraft server and run it:
-
-```bash
-git clone https://github.com/nicdgonzalez/fuji
-cd ./fuji
-# fuji --help
-fuji init
-fuji create "test" --accept-eula
-# fuji edit "test"
-fuji start "test" --auto-reconnect
-```
