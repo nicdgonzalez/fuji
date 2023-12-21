@@ -27,7 +27,20 @@ class FujiCommands(clap.Extension):
 
     @clap.command()
     def list(self, /) -> None:
-        """List all servers."""
+        """List all available servers."""
+        raise NotImplementedError
+
+    @clap.command()
+    def create(self, name: str, /, *, accept_eula: bool = False) -> None:
+        """Create a new server.
+
+        Parameters
+        ----------
+        name : :class:`str`
+            The name of the server to create.
+        accept_eula : :class:`bool`
+            Whether to accept the EULA without prompting the user.
+        """
         raise NotImplementedError
 
     @clap.command()
@@ -42,5 +55,5 @@ class FujiCommands(clap.Extension):
         raise NotImplementedError
 
 
-def setup(parser: clap.Parser) -> None:
-    parser.add_command(FujiCommands())
+def setup(parser: clap.ArgumentParser) -> None:
+    parser.add_extension(FujiCommands())

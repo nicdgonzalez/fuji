@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 import os
 import pathlib
@@ -110,9 +112,8 @@ class MinecraftServer:
         except OSError:
             return False
 
-    def new(
+    def create(
         self,
-        /,
         *,
         accept_eula: bool = False,
         version: Optional[str] = None,
@@ -140,11 +141,11 @@ class MinecraftServer:
         _log.info(f"Created directory at {self.path}")
 
         self.update(version=version, build=build)
-        self.generate_server_properties(accept_eula=accept_eula)
+        self._generate_server_properties(accept_eula=accept_eula)
         _log.info(f"Succesfully created server {self.name!r}.")
 
     def update(
-        self, /, *, version: Optional[str] = None, build: Optional[int] = None
+        self, *, version: Optional[str] = None, build: Optional[int] = None
     ) -> None:
         """Update the JAR file to the specified version and build, if possible.
 
@@ -161,7 +162,7 @@ class MinecraftServer:
         if not self.exists:
             raise FileNotFoundError(f"Server {self.name!r} does not exist.")
 
-        name, content = self.download_server_jar(version, build)
+        name, content = self._download_server_jar(version, build)
 
         if name == self.server_jar.resolve().name:
             return
@@ -179,7 +180,7 @@ class MinecraftServer:
         self.server_jar.symlink_to(paper_jar)
         _log.info(f"Successfully updated server {self.name!r}.")
 
-    def download_server_jar(
+    def _download_server_jar(
         self, version: Optional[str] = None, build: Optional[int] = None
     ) -> Tuple[str, bytes]:
         """Download the server JAR file from PaperMC's API.
@@ -245,7 +246,7 @@ class MinecraftServer:
         _log.info("Download complete.")
         return name, response.content
 
-    def generate_server_properties(
+    def _generate_server_properties(
         self, /, *, accept_eula: bool = False
     ) -> None:
         """Runs the server to generate the server.properties file and EULA.
@@ -328,7 +329,6 @@ class MinecraftServer:
     def add_plugin(
         self,
         file_name: str,
-        /,
         *,
         local_path: Optional[str] = None,
         url: Optional[str] = None,
@@ -396,7 +396,7 @@ class MinecraftServer:
         plugin.write_bytes(plugin_data)
         _log.info(f"Successfully installed plugin {file_name!r}.")
 
-    def remove_plugin(self, file_name: str, /) -> None:
+    def remove_plugin(self, file_name: str) -> None:
         """Remove a plugin from the server's "plugins" directory.
 
         Parameters

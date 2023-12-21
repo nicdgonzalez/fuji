@@ -9,7 +9,7 @@ import clap
 if TYPE_CHECKING:
     from builtins import list as List
 
-parser = clap.Parser(
+parser = clap.ArgumentParser(
     "A command-line tool for managing Minecraft servers.",
     epilog="Thank you for using Fuji!",
 )
@@ -19,14 +19,14 @@ extensions = [
 ]
 
 for extension in extensions:
-    parser.add_extension(extension, package="fuji")
+    parser.extend(extension, package="fuji")
 
 
 def logging_setup() -> None:
     """Configure logging for the application."""
     handlers: List[logging.Handler] = []
     formatter = logging.Formatter(
-        fmt="$(asctime)s %(levelname)s %(name)s]: %(message)s",
+        fmt="%(asctime)s %(levelname)s %(name)s]: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S%z",
     )
 

@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-import logging
 import json
+import logging
 import pathlib
 from typing import TYPE_CHECKING
 
 from .servers import MinecraftServer
 
 if TYPE_CHECKING:
-    from builtins import list as List
     from builtins import dict as Dict
-    from typing import Any
+    from builtins import list as List
+    from typing import Any, Optional
 
 _log = logging.getLogger(__name__)
 
@@ -20,7 +20,7 @@ class Fuji:
     CONFIG_JSON = pathlib.Path(__file__).parents[1].joinpath("config.json")
 
     def __init__(self, directory: str = str(DEFAULT_ROOT)) -> None:
-        self._config = NotImplemented
+        self.config = self.load_config()
         self._root = self._config.get("root", directory)
 
     def load_config(self) -> Dict[str, Any]:
@@ -38,6 +38,13 @@ class Fuji:
             data = default_data
 
         return data
+
+    def save_config(self, data: Optional[Dict[str, Any]] = None, /) -> None:
+        """Write to the configuration file."""
+        if not data:
+            data = self._config
+
+        self.CONFIG_JSON.write_text(json.dumps(data, indent=4))
 
     def init(self, directory: str = str(DEFAULT_ROOT)) -> None:
         """Run once to initialize Fuji.
